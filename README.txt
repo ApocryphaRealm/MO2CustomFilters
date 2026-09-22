@@ -1,6 +1,6 @@
 MO2 Custom Filters
 ==================
-Version 1.0.2
+Version 1.0.3
 
 A Mod Organizer 2 plugin. Adds two tabs beside MO2's own filters - Separators and Keywords - with a
 search box on each, and shows on every filter, MO2's own included, how many mods it holds.
