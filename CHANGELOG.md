@@ -2,6 +2,11 @@
 
 Versions are issued by the project's version gate. Written as the change happens (rule 61).
 
+## 1.0.2 - 2026-09-22
+
+* The Separators and Keywords tabs are rebuilt on every MO2 refresh, so a renamed mod (MO2 Patch Tagger's
+  `[Patch]` prefix, a rename you make yourself followed by a refresh) shows up without a restart.
+
 ## 1.0.1 - 2026-09-22
 
 * MO2's own Filters tab gets a search box too, in the bottom row where the "Filter separators" dropdown

@@ -1,4 +1,4 @@
-﻿# MO2 Custom Filters - a Mod Organizer 2 plugin that adds two tabs to the FILTER pane on the left of the mod list:
+# MO2 Custom Filters - a Mod Organizer 2 plugin that adds two tabs to the FILTER pane on the left of the mod list:
 # "Separators" (tick a separator to show its mods) and "Keywords" (tick a keyword to show the mods whose names carry
 # it - "[NoDelete]", "test", "unpublished", or any word you add), and puts a mod count on every filter, MO2's own
 # included. MO2's own filters stay exactly as they are, in the first tab, "Filters".
@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.1"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.2"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -354,6 +354,13 @@ class _FilterTabs:
             mod_list.onModInstalled(lambda *a: self._contents_cache.clear())   # a reinstall changes what a mod contains
         except Exception:  # noqa: BLE001
             pass
+        # 1.0.2 (the owner, 2026-09-22, after MO2 Patch Tagger renamed 242 mods and the Keywords tab did not show
+        # [Patch]: "just set it to reread on a refresh"): every MO2 refresh re-reads the mod names and rebuilds the
+        # tabs. MO2 refreshes its plugin list as part of every refresh, and that is the callback the API offers.
+        try:
+            plugin._organizer.pluginList().onRefreshed(lambda *a: self.rebuild())
+        except Exception as e:  # noqa: BLE001
+            self._p._log(f"refresh hook not available: {e!r}")
         # MO2 rebuilds its filter tree (FilterList::refresh) on category edits and list refreshes, which drops our
         # counts - a short timer after rows appear puts them back
         self._mo2_timer = QTimer(group)
