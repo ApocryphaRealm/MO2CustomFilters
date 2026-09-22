@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.0"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.1"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -44,7 +44,7 @@ try:
     from PyQt6.QtCore import QModelIndex, Qt, QTimer
     from PyQt6.QtWidgets import (
         QAbstractItemView, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QTreeWidget, QTreeWidgetItem,
-        QPushButton, QRadioButton, QTabWidget, QTreeView, QVBoxLayout, QWidget,
+        QComboBox, QPushButton, QRadioButton, QTabWidget, QTreeView, QVBoxLayout, QWidget,
     )
     from PyQt6.QtGui import QBrush, QColor, QIcon
     _DISPLAY = Qt.ItemDataRole.DisplayRole
@@ -59,7 +59,7 @@ except ImportError:  # MO2 builds that still ship PyQt5
     from PyQt5.QtCore import QModelIndex, Qt, QTimer
     from PyQt5.QtWidgets import (
         QAbstractItemView, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu, QTreeWidget, QTreeWidgetItem,
-        QPushButton, QRadioButton, QTabWidget, QTreeView, QVBoxLayout, QWidget,
+        QComboBox, QPushButton, QRadioButton, QTabWidget, QTreeView, QVBoxLayout, QWidget,
     )
     from PyQt5.QtGui import QBrush, QColor, QIcon
     _DISPLAY = Qt.DisplayRole
@@ -326,6 +326,8 @@ class _FilterTabs:
             pl.addLayout(row)
             self._tabs.addTab(page, title)
         lay.addWidget(self._tabs)
+        self._mo2_search = None
+        self._add_mo2_search(window, own_lay)
 
         # re-apply after MO2 re-sorts, refreshes or re-filters, and after its own filter controls change
         self._timer = QTimer(group)
@@ -395,6 +397,57 @@ class _FilterTabs:
         for i in range(lst.topLevelItemCount()):
             it = lst.topLevelItem(i)
             it.setHidden(bool(text) and text not in str(it.data(0, _USER)).lower())
+
+    # ---- a search box on MO2's own Filters tab ------------------------------------------------
+    def _add_mo2_search(self, window, own_lay):
+        """1.0.1 (the owner, 2026-09-22: "can you make that dropdown a searchbar then to match the other 2 tabs"):
+        the bottom row of MO2's Filters tab (And / Or / the "Filter separators" combo) gets a search box where the
+        combo was; the combo keeps its job and moves up beside Clear / Edit...."""
+        try:
+            combo = window.findChild(QComboBox, "filtersSeparators")
+            edit_btn = window.findChild(QPushButton, "filtersEdit")
+            if combo is None or edit_btn is None:
+                self._p._log("MO2 Filters tab search box not added: combo or Edit button not found")
+                return
+            # the row layouts sit inside plain QWidgets in MO2's .ui (the combo's parent is "widget"), so look
+            # for the layout that directly holds each widget, from its parent widget's layout downwards
+            def holding(lay, w):
+                if lay is None:
+                    return None
+                if lay.indexOf(w) != -1:
+                    return lay
+                for i in range(lay.count()):
+                    found = holding(lay.itemAt(i).layout(), w)
+                    if found is not None:
+                        return found
+                return None
+            bottom = holding(combo.parentWidget().layout() if combo.parentWidget() else None, combo)
+            button_row = holding(edit_btn.parentWidget().layout() if edit_btn.parentWidget() else None, edit_btn)
+            if bottom is None or button_row is None:
+                self._p._log(f"MO2 Filters tab search box not added: rows not found (bottom={bottom is not None}, buttons={button_row is not None})")
+                return
+            pos = bottom.indexOf(combo)
+            bottom.removeWidget(combo)
+            button_row.addWidget(combo, 1)
+            search = QLineEdit()
+            search.setPlaceholderText("Search filters")
+            search.setClearButtonEnabled(True)
+            search.textChanged.connect(lambda _t: self._apply_mo2_search())
+            bottom.insertWidget(pos, search, 2)
+            self._mo2_search = search
+        except Exception as e:  # noqa: BLE001
+            self._p._log(f"MO2 Filters tab search box failed: {e!r}")
+
+    def _apply_mo2_search(self):
+        tree, edit = self._mo2_tree, self._mo2_search
+        if tree is None or edit is None:
+            return
+        text = edit.text().strip().lower()
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            base = it.data(0, _BASE_ROLE)
+            label = str(base if base is not None else it.text(1)).lower()
+            it.setHidden(bool(text) and text not in label)
 
     # ---- counts on MO2's own filters ----------------------------------------------------------
     # One tally per criterion over the whole profile (every mod, separators left out), computed the way
@@ -549,6 +602,7 @@ class _FilterTabs:
                 it.setForeground(1, _GREY if count == 0 and inactive else _NORMAL)
                 done += 1
             self._p._log(f"MO2 filter counts: {done} entries over {len(facts)} mods in {time.time() - t0:.2f}s")
+            self._apply_mo2_search()      # MO2 rebuilt its tree: the search narrows the new items too
         except Exception as e:  # noqa: BLE001
             self._p._log(f"MO2 filter counts failed: {e!r}")
 

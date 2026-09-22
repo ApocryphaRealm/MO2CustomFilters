@@ -2,7 +2,13 @@
 
 Versions are issued by the project's version gate. Written as the change happens (rule 61).
 
-## 1.0.0 - 2026-09-22 - first release
+## 1.0.1 - 2026-09-22
+
+* MO2's own Filters tab gets a search box too, in the bottom row where the "Filter separators" dropdown
+  was; the dropdown keeps its three modes and moves up beside Clear and Edit... (the owner: "can you
+  make that dropdown a searchbar then to match the other 2 tabs").
+
+## 1.0.0 - 2026-09-22 - first release (not published; superseded the same day by 1.0.1)
 
 * Two tabs beside MO2's own filters: **Separators** (every separator in list order) and **Keywords**
   (every `[Tag]` in a mod name, the leading words you configure, and any keyword you add).
