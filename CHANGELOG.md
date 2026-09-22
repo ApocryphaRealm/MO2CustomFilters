@@ -2,6 +2,13 @@
 
 Versions are issued by the project's version gate. Written as the change happens (rule 61).
 
+## 1.0.3 - 2026-09-22
+
+* Ticking a separator now shows the mods under it in every list layout. A row with children - a separator when MO2's
+  collapsible separators are on, or a group row when the list is grouped by category, Nexus ID or priority - was
+  treated as though it were a mod, so it and everything beneath it were hidden. Containers are now shown when
+  anything under them matches, and opened so their mods are in view. Reported by ProteusBlack on the mod page.
+
 ## 1.0.2 - 2026-09-22
 
 * The Separators and Keywords tabs are rebuilt on every MO2 refresh, so a renamed mod (MO2 Patch Tagger's

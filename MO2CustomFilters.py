@@ -1,4 +1,4 @@
-# MO2 Custom Filters - a Mod Organizer 2 plugin that adds two tabs to the FILTER pane on the left of the mod list:
+﻿# MO2 Custom Filters - a Mod Organizer 2 plugin that adds two tabs to the FILTER pane on the left of the mod list:
 # "Separators" (tick a separator to show its mods) and "Keywords" (tick a keyword to show the mods whose names carry
 # it - "[NoDelete]", "test", "unpublished", or any word you add), and puts a mod count on every filter, MO2's own
 # included. MO2's own filters stay exactly as they are, in the first tab, "Filters".
@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.2"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.3"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -805,14 +805,34 @@ class _FilterTabs:
         sep_shown = {seps[t] for t in visible if t in seps}
         sep_shown |= {n for n, v in self._state["sep"].items() if v == self.INCLUDE}
         sep_shown -= {n for n, v in self._state["sep"].items() if v == self.EXCLUDE}
-        for parent, r, text, kids in rows:
-            if not filtering:
-                show = True
-            elif is_sep(text):
-                show = text in sep_shown
-            else:
-                show = text in visible
-            view.setRowHidden(r, parent, not show)
+        # 1.0.3 (ProteusBlack on the mod page, 2026-09-22: "I was hoping the Separators filter results in the main window
+        # would include all the mods under the filter search. Is there a reason it doesn't show them?"): a row that has
+        # CHILDREN is a container - a separator with MO2's collapsible separators on, or a group row when the list is
+        # grouped by category / Nexus ID / priority. Those were judged as if they were mods, so they and everything under
+        # them were hidden. A container now shows when any row under it shows, and is expanded so its mods are actually
+        # in view; a ticked separator still shows even when nothing under it survives the other ticks.
+        def apply_to(parent):
+            any_shown = False
+            for r in range(model.rowCount(parent)):
+                idx0 = model.index(r, 0, parent)
+                text = str(model.index(r, col, parent).data(_DISPLAY) or "")
+                has_kids = model.hasChildren(idx0)
+                child_shown = apply_to(idx0) if has_kids else False
+                if not filtering:
+                    show = True
+                elif is_sep(text):
+                    show = child_shown or text in sep_shown
+                elif has_kids:
+                    show = child_shown
+                else:
+                    show = text in visible
+                view.setRowHidden(r, parent, not show)
+                if filtering and show and child_shown:
+                    view.expand(idx0)
+                any_shown = any_shown or show
+            return any_shown
+
+        apply_to(QModelIndex())
 
 
 def createPlugin():
