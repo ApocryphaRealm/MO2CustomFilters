@@ -2,6 +2,13 @@
 
 Versions are issued by the project's version gate. Written as the change happens (rule 61).
 
+## 1.0.5 - 2026-09-23
+
+* Fixes MO2 closing when a mod is enabled or disabled. MO2's own callbacks (onModStateChanged, onModInstalled,
+  onModRemoved, onModMoved, the plugin list's onRefreshed) ran the tab rebuild synchronously, inside MO2's own
+  update, and the rebuild asks MO2 about every mod. Every callback and every mod-list signal now only starts a
+  timer; the work runs from the timer, on an empty stack, and still waits out any refresh in flight.
+
 ## 1.0.4 - 2026-09-23
 
 * Fixes MO2 closing when a mod or separator is renamed. The filter recount asked MO2's content feature to walk

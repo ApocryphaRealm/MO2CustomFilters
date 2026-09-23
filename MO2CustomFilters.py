@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.4"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.5"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -333,7 +333,7 @@ class _FilterTabs:
         self._timer = QTimer(group)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)          # was 50: leave MO2 a moment after the model settles
-        self._timer.timeout.connect(self._apply)
+        self._timer.timeout.connect(lambda: self._after_refresh(self._apply))
         for name in ("filtersClear", "clearFiltersButton"):
             b = window.findChild(QPushButton, name)
             if b is not None:
@@ -344,10 +344,18 @@ class _FilterTabs:
         search = window.findChild(QLineEdit, "modFilterEdit")
         if search is not None:
             search.textChanged.connect(self._schedule)
+        # NEVER WORK INSIDE MO2'S OWN CALLBACK (2026-09-23, faults.log: "MO2 closed after enabling a mod" - the
+        # crashing frame was the onModStateChanged lambda calling rebuild(), which asks mobase for every mod's state
+        # while MO2 is still inside ModList::setData). A callback from MO2, and a Qt signal MO2 emits mid-update, only
+        # start a timer; the timer's slot runs on an empty stack and does the mobase work there.
+        self._rebuild_timer = QTimer(group)
+        self._rebuild_timer.setSingleShot(True)
+        self._rebuild_timer.setInterval(400)
+        self._rebuild_timer.timeout.connect(lambda: self._after_refresh(self.rebuild))
         mod_list = plugin._organizer.modList()
         for hook in ("onModInstalled", "onModRemoved", "onModMoved", "onModStateChanged"):
             try:
-                getattr(mod_list, hook)(lambda *a: self.rebuild())
+                getattr(mod_list, hook)(lambda *a: self._rebuild_timer.start())
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -358,7 +366,7 @@ class _FilterTabs:
         # [Patch]: "just set it to reread on a refresh"): every MO2 refresh re-reads the mod names and rebuilds the
         # tabs. MO2 refreshes its plugin list as part of every refresh, and that is the callback the API offers.
         try:
-            plugin._organizer.pluginList().onRefreshed(lambda *a: self.rebuild())
+            plugin._organizer.pluginList().onRefreshed(lambda *a: self._rebuild_timer.start())
         except Exception as e:  # noqa: BLE001
             self._p._log(f"refresh hook not available: {e!r}")
         # MO2 rebuilds its filter tree (FilterList::refresh) on category edits and list refreshes, which drops our
@@ -366,10 +374,10 @@ class _FilterTabs:
         self._mo2_timer = QTimer(group)
         self._mo2_timer.setSingleShot(True)
         self._mo2_timer.setInterval(750)      # coalesces MO2's dataChanged storms (start-up, refresh) into one recount
-        self._mo2_timer.timeout.connect(self._count_mo2_filters)
+        self._mo2_timer.timeout.connect(lambda: self._after_refresh(self._count_mo2_filters))
         if self._mo2_tree is not None:
             try:
-                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._after_refresh(self._mo2_timer.start))
+                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._mo2_timer.start())
             except Exception as e:  # noqa: BLE001
                 self._p._log(f"MO2 filter tree not hooked: {e!r}")
         self.rebuild()
@@ -761,7 +769,7 @@ class _FilterTabs:
 
     # ---- the view -----------------------------------------------------------------------------
     def _schedule(self, *args):
-        self._after_refresh(self._timer.start)
+        self._timer.start()
 
     def _after_refresh(self, fn):
         """Run fn now if MO2 is idle, else once its current refresh has finished. A rename or a refresh resets the mod
@@ -786,7 +794,7 @@ class _FilterTabs:
         # directory structure, and announced by ModList::notifyChange -> dataChanged over every row (also after a
         # refresh); recount MO2's filters then, else Conflicted / Has hidden files read 0
         try:
-            self._source_model().dataChanged.connect(lambda *a: self._after_refresh(self._mo2_timer.start))
+            self._source_model().dataChanged.connect(lambda *a: self._mo2_timer.start())
         except Exception as e:  # noqa: BLE001
             self._p._log(f"mod list dataChanged not hooked: {e!r}")
 
