@@ -470,7 +470,7 @@ class _FilterTabs:
     #   Endorsed / Tracked endorsedState / trackedState
     #   Has Nexus ID       nexusId > 0, never for foreign / backup / Overwrite
     #   Has game data      not FLAG_INVALID                                   -> IModList state VALID
-    #   <Contains X>       ModDataContent.getContentsFor(fileTree)           (cached per mod)
+    #   <Contains X>       top level of the mod folder -> MO2 content ids       (cached per mod)
     #   a category         the category is set on the mod                    -> its name is in mod.categories()
     _SPECIAL_FIRST = 10000
     (_CHECKED_ID, _UPDATE_ID, _HASCAT_ID, _CONFLICT_ID, _HIDDEN_ID, _ENDORSED_ID, _BACKUP_ID, _MANAGED_ID,
