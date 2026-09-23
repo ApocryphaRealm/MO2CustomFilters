@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.4"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.5"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -516,19 +516,75 @@ class _FilterTabs:
             self._p._log(f"conflict / hidden-file facts unavailable: {e!r}")
         return out
 
+    # CONTENT KINDS FROM DISK (2026-09-23). getContentsFor(mod.fileTree()) took MO2 down with an access violation the
+    # moment a mod or separator was renamed - faults.log named it: _contents_of <- _mod_facts <- _count_mo2_filters.
+    # The file tree of a just-renamed ModInfo is not safe to walk from a plugin. The kinds are read off the mod
+    # folder's top level instead, with the checks the Gamebryo content feature makes, and mapped to MO2's own content
+    # ids by the content's name (getAllContents() is a plain list and safe). Nothing per mod touches MO2 but the path.
+    _CONTENT_CHECKS = (
+        ("skse", lambda files, dirs: "skse" in dirs),
+        ("skyproc", lambda files, dirs: "skyproc patchers" in dirs),
+        ("plugin", lambda files, dirs: any(f.endswith((".esp", ".esm", ".esl")) for f in files)),
+        ("interface", lambda files, dirs: "interface" in dirs),
+        ("mesh", lambda files, dirs: "meshes" in dirs),
+        ("archive", lambda files, dirs: any(f.endswith(".bsa") for f in files)),
+        ("bsa", lambda files, dirs: any(f.endswith(".bsa") for f in files)),
+        ("script", lambda files, dirs: "scripts" in dirs),
+        ("sound", lambda files, dirs: "sound" in dirs or "music" in dirs),
+        ("music", lambda files, dirs: "music" in dirs),
+        ("texture", lambda files, dirs: "textures" in dirs),
+        ("string", lambda files, dirs: "strings" in dirs),
+        ("ini", lambda files, dirs: any(f.endswith(".ini") and f != "meta.ini" for f in files)),
+        ("modgroup", lambda files, dirs: any(f.endswith(".modgroups") for f in files)),
+        ("mcm", lambda files, dirs: "mcm" in dirs),
+        ("shader", lambda files, dirs: "shadersfx" in dirs or "shaders" in dirs),
+        ("seq", lambda files, dirs: "seq" in dirs),
+        ("grass", lambda files, dirs: "grass" in dirs),
+        ("lod", lambda files, dirs: "lodsettings" in dirs),
+        ("font", lambda files, dirs: "fonts" in dirs),
+        ("root", lambda files, dirs: "root" in dirs),
+    )
+
+    def _content_checks(self):
+        """[(MO2 content id, check)] built once from the game's content list, matched by name keyword."""
+        built = getattr(self, "_content_check_list", None)
+        if built is not None:
+            return built
+        built = self._content_check_list = []
+        try:
+            org = self._p._organizer
+            try:
+                feature = org.gameFeatures().gameFeature(mobase.ModDataContent)
+            except Exception:  # noqa: BLE001
+                feature = org.managedGame().feature(mobase.ModDataContent)
+            unmatched = []
+            for c in (feature.getAllContents() if feature else []):
+                nm = str(c.name).lower()
+                for key, check in self._CONTENT_CHECKS:
+                    if key in nm:
+                        built.append((int(c.id), check))
+                        break
+                else:
+                    unmatched.append(str(c.name))
+            if unmatched:
+                self._p._log(f"content kinds with no disk check (counted 0): {unmatched}")
+        except Exception as e:  # noqa: BLE001
+            self._p._log(f"content list unavailable: {e!r}")
+        return built
+
     def _contents_of(self, name, mod):
         if name in self._contents_cache:
             return self._contents_cache[name]
         ids = set()
         try:
-            if self._content_feature is None:
-                org = self._p._organizer
-                try:
-                    self._content_feature = org.gameFeatures().gameFeature(mobase.ModDataContent)
-                except Exception:  # noqa: BLE001
-                    self._content_feature = org.managedGame().feature(mobase.ModDataContent)
-            if self._content_feature:
-                ids = set(self._content_feature.getContentsFor(mod.fileTree()))
+            root = mod.absolutePath()
+            files, dirs = set(), set()
+            with os.scandir(root) as it:
+                for e in it:
+                    (dirs if e.is_dir() else files).add(e.name.lower())
+            for cid, check in self._content_checks():
+                if check(files, dirs):
+                    ids.add(cid)
         except Exception:  # noqa: BLE001
             pass
         self._contents_cache[name] = ids
