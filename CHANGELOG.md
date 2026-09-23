@@ -2,6 +2,18 @@
 
 Versions are issued by the project's version gate. Written as the change happens (rule 61).
 
+## 1.0.4 - 2026-09-23
+
+* Fixes MO2 closing when a mod or separator is renamed. The filter recount asked MO2's content feature to walk
+  each mod's file tree, and the tree of a just-renamed mod is not safe to walk - MO2 died with an access violation
+  (found by the new fault log). The content kinds (Plugins, Textures, Meshes, Scripts, SKSE, BSA, Interface, Sound,
+  INI, MCM...) are now read off the top level of the mod folder and mapped to MO2's own content ids, so nothing per
+  mod touches MO2 beyond its path.
+* Recounts triggered by the mod list's model wait until MO2 has finished any refresh in flight
+  (`IOrganizer.onNextRefresh`), and the settle timer is 300 ms instead of 50.
+* Arms Python's faulthandler on import (shared `plugins\data\faults.log`), the standing rule for every MO2 plugin of
+  ours: a native crash names the plugin and line instead of leaving only a minidump.
+
 ## 1.0.3 - 2026-09-22
 
 * Ticking a separator now shows the mods under it in every list layout. A row with children - a separator when MO2's

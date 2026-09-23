@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.5"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.4"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
