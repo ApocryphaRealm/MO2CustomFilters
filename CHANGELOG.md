@@ -4,6 +4,12 @@ Versions are issued by the project's version gate. Written as the change happens
 
 ## 1.0.5 - 2026-09-23
 
+* Fixes MO2 closing when a mod is deactivated. The plugin's three timers were parented to MO2's filter group box; when
+  MO2 rebuilt that pane the timers were deleted with it, and the next onModStateChanged callback started a dead
+  timer (found by the fault log). The timers are Python-owned now and every start is guarded against a deleted object.
+
+## 1.0.5 - 2026-09-23
+
 * Fixes MO2 closing when a mod is enabled or disabled. MO2's own callbacks (onModStateChanged, onModInstalled,
   onModRemoved, onModMoved, the plugin list's onRefreshed) ran the tab rebuild synchronously, inside MO2's own
   update, and the rebuild asks MO2 about every mod. Every callback and every mod-list signal now only starts a

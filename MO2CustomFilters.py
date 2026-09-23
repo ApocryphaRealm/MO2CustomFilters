@@ -38,6 +38,13 @@ __version__ = "1.0.5"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
+try:
+    from PyQt6 import sip as _sip
+except ImportError:
+    try:
+        import sip as _sip
+    except ImportError:
+        _sip = None
 import time
 
 try:
@@ -330,7 +337,7 @@ class _FilterTabs:
         self._add_mo2_search(window, own_lay)
 
         # re-apply after MO2 re-sorts, refreshes or re-filters, and after its own filter controls change
-        self._timer = QTimer(group)
+        self._timer = QTimer()                # Python-owned: never parented to an MO2 widget (2026-09-23)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)          # was 50: leave MO2 a moment after the model settles
         self._timer.timeout.connect(lambda: self._after_refresh(self._apply))
@@ -348,14 +355,14 @@ class _FilterTabs:
         # crashing frame was the onModStateChanged lambda calling rebuild(), which asks mobase for every mod's state
         # while MO2 is still inside ModList::setData). A callback from MO2, and a Qt signal MO2 emits mid-update, only
         # start a timer; the timer's slot runs on an empty stack and does the mobase work there.
-        self._rebuild_timer = QTimer(group)
+        self._rebuild_timer = QTimer()
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(400)
         self._rebuild_timer.timeout.connect(lambda: self._after_refresh(self.rebuild))
         mod_list = plugin._organizer.modList()
         for hook in ("onModInstalled", "onModRemoved", "onModMoved", "onModStateChanged"):
             try:
-                getattr(mod_list, hook)(lambda *a: self._rebuild_timer.start())
+                getattr(mod_list, hook)(lambda *a: self._safe_start(self._rebuild_timer))
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -366,18 +373,18 @@ class _FilterTabs:
         # [Patch]: "just set it to reread on a refresh"): every MO2 refresh re-reads the mod names and rebuilds the
         # tabs. MO2 refreshes its plugin list as part of every refresh, and that is the callback the API offers.
         try:
-            plugin._organizer.pluginList().onRefreshed(lambda *a: self._rebuild_timer.start())
+            plugin._organizer.pluginList().onRefreshed(lambda *a: self._safe_start(self._rebuild_timer))
         except Exception as e:  # noqa: BLE001
             self._p._log(f"refresh hook not available: {e!r}")
         # MO2 rebuilds its filter tree (FilterList::refresh) on category edits and list refreshes, which drops our
         # counts - a short timer after rows appear puts them back
-        self._mo2_timer = QTimer(group)
+        self._mo2_timer = QTimer()
         self._mo2_timer.setSingleShot(True)
         self._mo2_timer.setInterval(750)      # coalesces MO2's dataChanged storms (start-up, refresh) into one recount
         self._mo2_timer.timeout.connect(lambda: self._after_refresh(self._count_mo2_filters))
         if self._mo2_tree is not None:
             try:
-                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._mo2_timer.start())
+                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._safe_start(self._mo2_timer))
             except Exception as e:  # noqa: BLE001
                 self._p._log(f"MO2 filter tree not hooked: {e!r}")
         self.rebuild()
@@ -769,7 +776,19 @@ class _FilterTabs:
 
     # ---- the view -----------------------------------------------------------------------------
     def _schedule(self, *args):
-        self._timer.start()
+        self._safe_start(self._timer)
+
+    def _safe_start(self, timer):
+        """Start a timer only while its C++ side exists. The timers used to be parented to MO2's filter group box;
+        when MO2 rebuilt that pane the timers died with it and the next onModStateChanged callback started a dead
+        QTimer - access violation on deactivating a mod (faults.log, 2026-09-23 06:57). They are parentless now,
+        and this guard covers the wrapper outliving the object all the same."""
+        try:
+            if timer is None or (_sip is not None and _sip.isdeleted(timer)):
+                return
+            timer.start()
+        except RuntimeError:
+            pass
 
     def _after_refresh(self, fn):
         """Run fn now if MO2 is idle, else once its current refresh has finished. A rename or a refresh resets the mod
@@ -794,7 +813,7 @@ class _FilterTabs:
         # directory structure, and announced by ModList::notifyChange -> dataChanged over every row (also after a
         # refresh); recount MO2's filters then, else Conflicted / Has hidden files read 0
         try:
-            self._source_model().dataChanged.connect(lambda *a: self._mo2_timer.start())
+            self._source_model().dataChanged.connect(lambda *a: self._safe_start(self._mo2_timer))
         except Exception as e:  # noqa: BLE001
             self._p._log(f"mod list dataChanged not hooked: {e!r}")
 
