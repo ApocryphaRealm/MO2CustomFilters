@@ -516,7 +516,7 @@ class _FilterTabs:
             self._p._log(f"conflict / hidden-file facts unavailable: {e!r}")
         return out
 
-    # CONTENT KINDS FROM DISK (2026-09-23). getContentsFor(mod.fileTree()) took MO2 down with an access violation the
+    # CONTENT KINDS FROM DISK (2026-09-23). Asking MO2's content feature to walk a mod's file tree took MO2 down with an access violation the
     # moment a mod or separator was renamed - faults.log named it: _contents_of <- _mod_facts <- _count_mo2_filters.
     # The file tree of a just-renamed ModInfo is not safe to walk from a plugin. The kinds are read off the mod
     # folder's top level instead, with the checks the Gamebryo content feature makes, and mapped to MO2's own content
