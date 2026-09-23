@@ -340,7 +340,7 @@ class _FilterTabs:
         self._timer = QTimer()                # Python-owned: never parented to an MO2 widget (2026-09-23)
         self._timer.setSingleShot(True)
         self._timer.setInterval(300)          # was 50: leave MO2 a moment after the model settles
-        self._timer.timeout.connect(lambda: self._after_refresh(self._apply))
+        self._timer.timeout.connect(self._apply_slot)
         for name in ("filtersClear", "clearFiltersButton"):
             b = window.findChild(QPushButton, name)
             if b is not None:
@@ -351,42 +351,37 @@ class _FilterTabs:
         search = window.findChild(QLineEdit, "modFilterEdit")
         if search is not None:
             search.textChanged.connect(self._schedule)
-        # NEVER WORK INSIDE MO2'S OWN CALLBACK (2026-09-23, faults.log: "MO2 closed after enabling a mod" - the
-        # crashing frame was the onModStateChanged lambda calling rebuild(), which asks mobase for every mod's state
-        # while MO2 is still inside ModList::setData). A callback from MO2, and a Qt signal MO2 emits mid-update, only
-        # start a timer; the timer's slot runs on an empty stack and does the mobase work there.
+        # NOTHING OF MO2'S CALLS INTO THIS PLUGIN (1.0.5, third issue, 2026-09-23). Two crashes - 02:57 on deactivating
+        # a mod, 04:34 with nobody touching MO2, three minutes after start when its directory refresh finished and it
+        # rebuilt its filter list - left the same fault signature: the main thread inside one of our lambdas with no
+        # line number, i.e. a slot being INVOKED from MO2's own emit, not anything the slot did. So there are no
+        # connections to MO2's model signals (dataChanged, rowsInserted, modelReset, layoutChanged), none to its filter
+        # tree, no mobase callbacks and no onNextRefresh callback. One Python-owned timer polls a cheap signature of
+        # the mod list and the filter tree every 1.5 s and starts the work timers once it has been stable for a full
+        # tick; every slot is a bound method running on an empty stack from a QTimer this plugin owns.
         self._rebuild_timer = QTimer()
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(400)
-        self._rebuild_timer.timeout.connect(lambda: self._after_refresh(self.rebuild))
-        mod_list = plugin._organizer.modList()
-        for hook in ("onModInstalled", "onModRemoved", "onModMoved", "onModStateChanged"):
-            try:
-                getattr(mod_list, hook)(lambda *a: self._safe_start(self._rebuild_timer))
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            mod_list.onModInstalled(lambda *a: self._contents_cache.clear())   # a reinstall changes what a mod contains
-        except Exception:  # noqa: BLE001
-            pass
-        # 1.0.2 (the owner, 2026-09-22, after MO2 Patch Tagger renamed 242 mods and the Keywords tab did not show
-        # [Patch]: "just set it to reread on a refresh"): every MO2 refresh re-reads the mod names and rebuilds the
-        # tabs. MO2 refreshes its plugin list as part of every refresh, and that is the callback the API offers.
-        try:
-            plugin._organizer.pluginList().onRefreshed(lambda *a: self._safe_start(self._rebuild_timer))
-        except Exception as e:  # noqa: BLE001
-            self._p._log(f"refresh hook not available: {e!r}")
-        # MO2 rebuilds its filter tree (FilterList::refresh) on category edits and list refreshes, which drops our
-        # counts - a short timer after rows appear puts them back
+        self._rebuild_timer.timeout.connect(self._rebuild_slot)
         self._mo2_timer = QTimer()
         self._mo2_timer.setSingleShot(True)
-        self._mo2_timer.setInterval(750)      # coalesces MO2's dataChanged storms (start-up, refresh) into one recount
-        self._mo2_timer.timeout.connect(lambda: self._after_refresh(self._count_mo2_filters))
-        if self._mo2_tree is not None:
-            try:
-                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._safe_start(self._mo2_timer))
-            except Exception as e:  # noqa: BLE001
-                self._p._log(f"MO2 filter tree not hooked: {e!r}")
+        self._mo2_timer.setInterval(750)
+        self._mo2_timer.timeout.connect(self._mo2_slot)
+        self._poll = QTimer()
+        self._poll.setInterval(1500)
+        self._poll.timeout.connect(self._poll_tick)
+        self._poll_sig, self._poll_pending, self._poll_logged = None, None, False
+        self._poll.start()
+        # the two MO2 widgets whose signals ARE safe to take: both persist for MO2's lifetime and emit only on the
+        # user's own click, the same as MO2's search box and And/Or radios above. A click on MO2's filter tree or a
+        # column header changes what the proxy shows, so our hidden rows are re-applied at once instead of on the
+        # next poll (FilterList::cycleItem -> criteriaChanged -> ModListSortProxy::setCriteria in MO2 2.5.2)
+        try:
+            if self._mo2_tree is not None:
+                self._mo2_tree.itemClicked.connect(self._on_user_click)
+            self._view.header().sectionClicked.connect(self._on_user_click)
+        except Exception as e:  # noqa: BLE001
+            self._p._log(f"user-click hooks not added: {e!r}")
         self.rebuild()
 
     # ---- lists --------------------------------------------------------------------------------
@@ -651,7 +646,7 @@ class _FilterTabs:
 
     def _count_mo2_filters(self):
         tree = self._mo2_tree
-        if tree is None:
+        if tree is None or tree.topLevelItemCount() == 0:      # MO2 is between clearing and refilling its tree
             return
         try:
             t0 = time.time()
@@ -779,10 +774,7 @@ class _FilterTabs:
         self._safe_start(self._timer)
 
     def _safe_start(self, timer):
-        """Start a timer only while its C++ side exists. The timers used to be parented to MO2's filter group box;
-        when MO2 rebuilt that pane the timers died with it and the next onModStateChanged callback started a dead
-        QTimer - access violation on deactivating a mod (faults.log, 2026-09-23 06:57). They are parentless now,
-        and this guard covers the wrapper outliving the object all the same."""
+        """Start a timer only while its C++ side exists (a wrapper can outlive the object)."""
         try:
             if timer is None or (_sip is not None and _sip.isdeleted(timer)):
                 return
@@ -790,32 +782,85 @@ class _FilterTabs:
         except RuntimeError:
             pass
 
+    # ---- the slots: bound methods, each on an empty stack from a timer this plugin owns ---------
+    def _apply_slot(self):
+        self._after_refresh(self._apply)
+
+    def _on_user_click(self, *args):
+        self._safe_start(self._timer)
+
+    def _rebuild_slot(self):
+        self._after_refresh(self.rebuild)
+
+    def _mo2_slot(self):
+        self._after_refresh(self._count_mo2_filters)
+
     def _after_refresh(self, fn):
-        """Run fn now if MO2 is idle, else once its current refresh has finished. A rename or a refresh resets the mod
-        list's model while MO2 is still rebuilding its mod and profile tables; a slot that then asks mobase for every
-        mod's state took MO2 down (2026-09-23, "MO2 keeps closing after renaming a separator or mod"). IOrganizer's
-        onNextRefresh(fn, immediate_if_possible=True) is MO2's own way of waiting that out."""
+        """Run fn now. Until 1.0.5 this went through IOrganizer.onNextRefresh(fn, True), which hands MO2 a callback
+        to invoke when its refresh ends - one more way for MO2's own code to call into the plugin mid-mutation. The
+        poll below only starts a work timer once the list has been stable for a full tick, which is the wait that
+        callback was meant to provide."""
         try:
-            self._p._organizer.onNextRefresh(fn, True)
-        except Exception:  # noqa: BLE001
             fn()
+        except Exception as e:  # noqa: BLE001
+            self._p._log(f"{getattr(fn, '__name__', 'slot')} failed: {e!r}")
+
+    def _signature(self):
+        """What the poll compares: cheap facts, all read on an empty stack."""
+        view = self._view
+        model = view.model() if view is not None else None
+        if model is None:
+            return None
+        n = model.rowCount()
+        head = tuple(str(model.index(r, 0).data()) for r in range(min(n, 3)))
+        tail = tuple(str(model.index(r, 0).data()) for r in range(max(0, n - 3), n))
+        try:
+            mtime = os.path.getmtime(os.path.join(self._p._organizer.profilePath(), "modlist.txt"))
+        except (OSError, RuntimeError):
+            mtime = 0
+        try:
+            mods_mtime = os.path.getmtime(self._p._organizer.modsPath())
+        except (OSError, RuntimeError):
+            mods_mtime = 0
+        tree = self._mo2_tree
+        tcount = tree.topLevelItemCount() if tree is not None else 0
+        counted = bool(tcount) and "    (" in tree.topLevelItem(0).text(1)
+        return (id(model), n, head, tail, mtime, mods_mtime, tcount, counted)
+
+    def _poll_tick(self):
+        try:
+            sig = self._signature()
+            if sig is None:
+                return
+            if self._poll_sig is None:                     # first tick: remember, count once
+                self._poll_sig = sig
+                self._safe_start(self._mo2_timer)
+                return
+            if sig != self._poll_pending:                  # something moved: wait for a tick in which it holds still
+                self._poll_pending = sig
+                return
+            old = self._poll_sig
+            if sig == old:
+                return
+            self._poll_sig = sig
+            list_changed = old[4] != sig[4] or old[5] != sig[5]            # modlist.txt or the mods folder: rename, install, remove, move, enable
+            view_changed = old[:4] != sig[:4]                              # MO2 filtered, sorted, searched or reset the view
+            tree_changed = old[6] != sig[6] or not sig[7]                  # MO2 rebuilt its filter tree, or wiped our counts
+            if list_changed:
+                self._safe_start(self._rebuild_timer)
+            elif view_changed:
+                self._safe_start(self._timer)
+            if list_changed or tree_changed:
+                self._safe_start(self._mo2_timer)
+        except Exception as e:  # noqa: BLE001
+            if not self._poll_logged:
+                self._poll_logged = True
+                self._p._log(f"poll failed: {e!r}")
 
     def _hook(self, model):
-        if model is self._model:
-            return
+        """Remembers the model. It used to connect modelReset / layoutChanged / rowsInserted / rowsRemoved and the source
+        model's dataChanged; the poll watches the view instead (see __init__, 1.0.5)."""
         self._model = model
-        for sig in ("modelReset", "layoutChanged", "rowsInserted", "rowsRemoved"):
-            try:
-                getattr(model, sig).connect(self._schedule)
-            except Exception:  # noqa: BLE001
-                pass
-        # conflict and hidden-file flags are worked out a few seconds after start-up, once MO2 has built its
-        # directory structure, and announced by ModList::notifyChange -> dataChanged over every row (also after a
-        # refresh); recount MO2's filters then, else Conflicted / Has hidden files read 0
-        try:
-            self._source_model().dataChanged.connect(lambda *a: self._safe_start(self._mo2_timer))
-        except Exception as e:  # noqa: BLE001
-            self._p._log(f"mod list dataChanged not hooked: {e!r}")
 
     def _name_column(self, model):
         for c in range(model.columnCount()):

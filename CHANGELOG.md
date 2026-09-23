@@ -4,13 +4,20 @@ Versions are issued by the project's version gate. Written as the change happens
 
 ## 1.0.5 - 2026-09-23
 
-* Fixes MO2 closing when a mod is deactivated. The plugin's three timers were parented to MO2's filter group box; when
-  MO2 rebuilt that pane the timers were deleted with it, and the next onModStateChanged callback started a dead
-  timer (found by the fault log). The timers are Python-owned now and every start is guarded against a deleted object.
-* Fixes MO2 closing when a mod is enabled or disabled. MO2's own callbacks (onModStateChanged, onModInstalled,
-  onModRemoved, onModMoved, the plugin list's onRefreshed) ran the tab rebuild synchronously, inside MO2's own
-  update, and the rebuild asks MO2 about every mod. Every callback and every mod-list signal now only starts a
-  timer; the work runs from the timer, on an empty stack, and still waits out any refresh in flight.
+* Fixes MO2 closing when a mod is enabled or disabled, on a rename, and once with nobody touching it (three minutes
+  after start, when MO2's directory refresh finished and it rebuilt its filter list). Every one of those crashes
+  left the same fault signature: the main thread inside one of the plugin's slots with no line number, which is a
+  slot being invoked from MO2's own signal mid-mutation, not anything the slot did. Two earlier issues of 1.0.5
+  (callbacks that only started timers; timers Python-owned and guarded) each answered a narrower hypothesis and
+  each still crashed. The plugin now takes nothing from MO2's internals: no model signals (dataChanged,
+  rowsInserted, modelReset, layoutChanged), no hook on MO2's filter tree, no mobase callbacks, no onNextRefresh
+  callback. A timer the plugin owns polls a cheap signature of the mod list and the filter tree every 1.5 s
+  (modlist.txt and the mods folder's times, the view's row count and end names, the filter tree's item count and
+  whether the counts are on it) and starts the work once it has held still for a full tick. Only user-driven
+  widget signals remain - clicks on the plugin's own lists, MO2's search box, And/Or, Clear, its filter tree and
+  the column headers - so a click still re-applies the filters within a third of a second; a refresh or an
+  install is picked up by the next poll. Modelled on how MO2 itself does it: its filter list is rebuilt with a
+  plain clear-and-refill and its filtering is a proxy invalidation, and nothing outside MO2 is called during either.
 
 ## 1.0.4 - 2026-09-23
 
