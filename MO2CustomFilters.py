@@ -34,7 +34,7 @@
 #
 # Copyright (C) 2026 ApocryphaRealm. GPL-3.0-or-later - see LICENSE and NOTICE.md.
 
-__version__ = "1.0.3"    # issued by version-gate.ps1; never typed by hand
+__version__ = "1.0.4"    # issued by version-gate.ps1; never typed by hand
 
 import os
 import re
@@ -332,7 +332,7 @@ class _FilterTabs:
         # re-apply after MO2 re-sorts, refreshes or re-filters, and after its own filter controls change
         self._timer = QTimer(group)
         self._timer.setSingleShot(True)
-        self._timer.setInterval(50)
+        self._timer.setInterval(300)          # was 50: leave MO2 a moment after the model settles
         self._timer.timeout.connect(self._apply)
         for name in ("filtersClear", "clearFiltersButton"):
             b = window.findChild(QPushButton, name)
@@ -369,7 +369,7 @@ class _FilterTabs:
         self._mo2_timer.timeout.connect(self._count_mo2_filters)
         if self._mo2_tree is not None:
             try:
-                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._mo2_timer.start())
+                self._mo2_tree.model().rowsInserted.connect(lambda *a: self._after_refresh(self._mo2_timer.start))
             except Exception as e:  # noqa: BLE001
                 self._p._log(f"MO2 filter tree not hooked: {e!r}")
         self.rebuild()
@@ -705,7 +705,17 @@ class _FilterTabs:
 
     # ---- the view -----------------------------------------------------------------------------
     def _schedule(self, *args):
-        self._timer.start()
+        self._after_refresh(self._timer.start)
+
+    def _after_refresh(self, fn):
+        """Run fn now if MO2 is idle, else once its current refresh has finished. A rename or a refresh resets the mod
+        list's model while MO2 is still rebuilding its mod and profile tables; a slot that then asks mobase for every
+        mod's state took MO2 down (2026-09-23, "MO2 keeps closing after renaming a separator or mod"). IOrganizer's
+        onNextRefresh(fn, immediate_if_possible=True) is MO2's own way of waiting that out."""
+        try:
+            self._p._organizer.onNextRefresh(fn, True)
+        except Exception:  # noqa: BLE001
+            fn()
 
     def _hook(self, model):
         if model is self._model:
@@ -720,7 +730,7 @@ class _FilterTabs:
         # directory structure, and announced by ModList::notifyChange -> dataChanged over every row (also after a
         # refresh); recount MO2's filters then, else Conflicted / Has hidden files read 0
         try:
-            self._source_model().dataChanged.connect(lambda *a: self._mo2_timer.start())
+            self._source_model().dataChanged.connect(lambda *a: self._after_refresh(self._mo2_timer.start))
         except Exception as e:  # noqa: BLE001
             self._p._log(f"mod list dataChanged not hooked: {e!r}")
 
@@ -837,3 +847,35 @@ class _FilterTabs:
 
 def createPlugin():
     return MO2CustomFilters()
+
+
+# --- fault handling (standing rule, 2026-09-23: every MO2 plugin of ours logs and arms faulthandler) ---------------
+def _arm_faulthandler():
+    """Arm Python's faulthandler once per process, into plugins\\data\\faults.log. When MO2 dies inside C++ with a
+    Python slot on the stack, the minidump names only modules; faulthandler writes the Python frames of every
+    thread first, so the log names the plugin and the line. Whichever of our plugins loads first arms it."""
+    try:
+        import faulthandler
+        import os
+        import time
+        if faulthandler.is_enabled():
+            return
+        here = os.path.abspath(__file__)
+        while os.path.basename(here).lower() != "plugins":
+            parent = os.path.dirname(here)
+            if parent == here:
+                return
+            here = parent
+        path = os.path.join(here, "data", "faults.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fh = open(path, "a", encoding="utf-8")
+        who = os.path.basename(os.path.dirname(__file__)) if os.path.basename(__file__) == "__init__.py" else os.path.basename(__file__)
+        fh.write(time.strftime("%Y-%m-%d %H:%M:%S") + " faulthandler armed by " + who + chr(10))
+        fh.flush()
+        globals()["_FAULT_LOG_HANDLE"] = fh          # kept open for the life of the process
+        faulthandler.enable(file=fh, all_threads=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_arm_faulthandler()
